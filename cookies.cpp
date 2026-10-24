@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <string>
+#include <cstring>
 #include "cookies.h"
 #include "metamod_oslink.h"
 #include "schemasystem/schemasystem.h"
@@ -24,11 +26,6 @@ ICookiesApi* g_pCookiesCore = nullptr;
 
 std::map<std::string, std::string> g_mapCookies[64];
 
-CGameEntitySystem* GameEntitySystem()
-{
-	return g_pUtils->GetCGameEntitySystem();
-}
-
 void StartupServer()
 {
 	g_pGameEntitySystem = GameEntitySystem();
@@ -44,6 +41,7 @@ bool cookies::Load(PluginId id, ISmmAPI* ismm, char* error, size_t maxlen, bool 
 	GET_V_IFACE_ANY(GetEngineFactory, g_pSchemaSystem, ISchemaSystem, SCHEMASYSTEM_INTERFACE_VERSION);
 	GET_V_IFACE_CURRENT(GetEngineFactory, engine, IVEngineServer2, SOURCE2ENGINETOSERVER_INTERFACE_VERSION);
 	GET_V_IFACE_CURRENT(GetFileSystemFactory, g_pFullFileSystem, IFileSystem, FILESYSTEM_INTERFACE_VERSION);
+	GET_V_IFACE_CURRENT(GetEngineFactory, g_pGameResourceServiceServer, IGameResourceService, GAMERESOURCESERVICESERVER_INTERFACE_VERSION);
 
 	g_SMAPI->AddListener( this, this );
 
@@ -205,14 +203,20 @@ void cookies::AllPluginsLoaded()
 
 void CookiesApi::SetCookie(int iSlot, const char* sCookieName, const char* sData)
 {
-	if(g_bSQLite) {
-		char szBuffer[256];
-		g_SMAPI->Format(szBuffer, sizeof(szBuffer), "INSERT OR REPLACE INTO client_cookies (steamid, cookie_name, cookie_data) VALUES (%lld, '%s', '%s')", engine->GetClientXUID(iSlot), sCookieName, sData);
-		g_pConnectionSQLite->Query(szBuffer, [](ISQLQuery* pQuery){});
-	} else {
-		char szBuffer[256];
-		g_SMAPI->Format(szBuffer, sizeof(szBuffer), "INSERT INTO client_cookies (steamid, cookie_name, cookie_data) VALUES (%lld, '%s', '%s') ON DUPLICATE KEY UPDATE cookie_data = '%s'", engine->GetClientXUID(iSlot), sCookieName, sData, sData);
-		g_pConnectionMysql->Query(szBuffer, [](ISQLQuery* pQuery){});
+	if(!sCookieName) sCookieName = "";
+	if(!sData) sData = "";
+	ISQLConnection* pConn = g_bSQLite ? g_pConnectionSQLite : (ISQLConnection*)g_pConnectionMysql;
+	if(pConn) {
+		std::string sName = pConn->Escape(sCookieName);
+		std::string sValue = pConn->Escape(sData);
+		sName.resize(strlen(sName.c_str()));
+		sValue.resize(strlen(sValue.c_str()));
+		std::string sQuery = "INSERT ";
+		if(g_bSQLite)
+			sQuery = "INSERT OR REPLACE INTO client_cookies (steamid, cookie_name, cookie_data) VALUES (" + std::to_string(engine->GetClientXUID(iSlot)) + ", '" + sName + "', '" + sValue + "')";
+		else
+			sQuery = "INSERT INTO client_cookies (steamid, cookie_name, cookie_data) VALUES (" + std::to_string(engine->GetClientXUID(iSlot)) + ", '" + sName + "', '" + sValue + "') ON DUPLICATE KEY UPDATE cookie_data = '" + sValue + "'";
+		pConn->Query((char*)sQuery.c_str(), [](ISQLQuery* pQuery){});
 	}
 	g_mapCookies[iSlot][sCookieName] = sData;
 }
